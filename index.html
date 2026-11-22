@@ -50,7 +50,7 @@ button:disabled{opacity:.4}
 .layer button{padding:4px 0}
 #status,.note{color:var(--mut);font-size:11px;margin:6px 0;min-height:14px}
 [hidden]{display:none!important}
-#mock{position:fixed;inset:0;z-index:10;display:grid;grid-template-columns:1fr 310px;gap:20px;padding:20px;background:rgba(40,38,36,.6);backdrop-filter:blur(26px);-webkit-backdrop-filter:blur(26px)}
+#mock{position:fixed;inset:0;z-index:10;display:grid;grid-template-columns:1fr 310px;gap:20px;padding:20px;background:rgba(52,49,47,.96)}
 #mock .mstage{display:flex;align-items:center;justify-content:center;min-width:0;min-height:0}
 #mcv{max-width:100%;max-height:100%;border-radius:20px;box-shadow:0 30px 80px rgba(0,0,0,.4)}
 </style>
@@ -76,6 +76,7 @@ button:disabled{opacity:.4}
   <select id="fmt"></select>
   <div class="btns" id="customSize" hidden><input type="number" id="cw" value="1080" min="64" max="8192" title="largura (px)"><input type="number" id="ch" value="1350" min="64" max="8192" title="altura (px)"></div>
   <div class="row"><label>fundo</label><input type="color" id="bg" value="#000000"><span></span></div>
+  <div class="row"><label>prévia</label><select id="pq"><option value="auto">automática (rápida)</option><option value="0.5">50%</option><option value="1">100% (pesada)</option></select><span></span></div>
   <h3>Exportar</h3>
   <div class="btns"><select id="pngScale"><option value="1">1×</option><option value="2" selected>2×</option><option value="3">3×</option><option value="4">4×</option></select><select id="imgFmt"><option value="png">PNG</option><option value="jpeg">JPEG</option><option value="svg">SVG</option></select><button id="png">Salvar</button></div>
   <div class="btns"><select id="vScale"><option value="1" selected>vídeo 1×</option><option value="2">vídeo 2×</option></select><select id="fps"><option>24</option><option selected>30</option><option>60</option></select><input type="number" id="dur" value="6" min="1" max="120" title="duração (s)"></div>
@@ -1354,7 +1355,12 @@ const srcT=tex(),palT=tex();let fA,fB,W,H,px=1,fmt=Object.keys(FORMATS)[0],bgHex
 function fbo(old){if(old){gl.deleteTexture(old.t);gl.deleteFramebuffer(old.f)}
   const t=tex();gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,W,H,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
   const f=gl.createFramebuffer();gl.bindFramebuffer(gl.FRAMEBUFFER,f);gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,t,0);return{t,f}}
-function setSize(k){const[w,h]=FORMATS[fmt];k=Math.min(k,MAXT/Math.max(w,h));px=k;
+let pv=1,pq='auto',slow=1;
+// a prévia é renderizada no tamanho em que aparece na tela, não no tamanho final: muito menos pixels por quadro
+function fit(){const[w,h]=FORMATS[fmt],r=stage.getBoundingClientRect();let k=Math.min(r.width/w,(r.height-48)/h);if(!(k>0))k=.5;
+  cv.style.width=w*k+'px';cv.style.height=h*k+'px';
+  pv=Math.max(.2,pq==='auto'?Math.min(1,k*Math.min(devicePixelRatio||1,2)*slow):+pq)}
+function setSize(k){const[w,h]=FORMATS[fmt];if(!k){fit();k=pv}k=Math.min(k,MAXT/Math.max(w,h));px=k;
   W=c2.width=cv.width=Math.round(w*k);H=c2.height=cv.height=Math.round(h*k);fA=fbo(fA);fB=fbo(fB)}
 function setPalette(name){S.pal=name;$('#customStops').hidden=name!=='custom';const c=document.createElement('canvas');c.width=256;c.height=1;const x=c.getContext('2d');
   const g=x.createLinearGradient(0,0,256,0),st=name==='custom'?S.custom:PALETTES[name];st.forEach((col,i)=>g.addColorStop(i/(st.length-1),col));
@@ -1417,11 +1423,13 @@ function render(T){
   pass(P1,fA,{uSrc:srcT},T);pass(P2,fB,{uA:fA.t},T);pass(P3,null,{uB:fB.t,uPal:palT},T)}
 
 // ---------- loop ----------
-let T=0,last=performance.now(),paused=false,busy=false,rec=null,recEnd=0;
+let T=0,last=performance.now(),paused=false,busy=false,rec=null,recEnd=0,fAcc=0,fN=0,mf=0;
 function loop(now){const dt=Math.min(.1,(now-last)/1000);last=now;
   if(!paused)T+=dt*S.speed;
+  // prévia automática: se 40 quadros seguidos ficarem abaixo de ~30 fps, reduz a resolução da prévia em 20%
+  fAcc+=dt;if(++fN===40){if(pq==='auto'&&!busy&&!rec&&fAcc/40>.033&&pv>.25){slow*=.8;setSize()}fAcc=0;fN=0}
   if(!busy)render(T);
-  if(mockOn)renderMockupScene(mcv,cv,MP);
+  if(mockOn&&++mf%4===0)renderMockupScene(mcv,cv,MP); // mockup a 1/4 dos quadros: o desenho 2D com sombras é caro
   if(rec)$('#status').textContent=`gravando… ${Math.max(0,(recEnd-now)/1000).toFixed(1)}s`;
   requestAnimationFrame(loop)}
 
@@ -1565,7 +1573,7 @@ async function exportImage(){if(rec)return;const f=$('#imgFmt').value;busy=true;
         ls.map((ln,i)=>`<text y="${(i-(ls.length-1)/2)*L.lh*s}" fill="${L.color}" font-family="${esc(L.font)}, sans-serif" font-weight="${L.weight}" font-size="${s}" letter-spacing="${L.track}em" text-anchor="${{left:'start',right:'end'}[L.align]||'middle'}" dominant-baseline="central">${esc(ln)}</text>`).join('')+'</g>'}).join('\n');
     blob=new Blob([`<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">\n<image href="${cv.toDataURL('image/png')}" width="${w}" height="${h}"/>\n${texts}\n</svg>`],{type:'image/svg+xml'})}
   else{blob=await new Promise(r=>cv.toBlob(r,'image/'+f,.92));if(f==='jpeg')ext='jpg'}
-  setSize(1);busy=false;dl(blob,`thermal-${w}x${h}-${Date.now()}.${ext}`);$('#status').textContent=`✓ ${f.toUpperCase()} ${w}×${h}`}
+  setSize();busy=false;dl(blob,`thermal-${w}x${h}-${Date.now()}.${ext}`);$('#status').textContent=`✓ ${f.toUpperCase()} ${w}×${h}`}
 
 // ---------- mockups (renderMockupScene vem do motor do Creativ) ----------
 const MP={...DEFAULT_MOCKUP_PARAMS},mcv=$('#mcv');let mockOn=false;
@@ -1577,11 +1585,12 @@ function buildMock(){const p=$('#mockCtl');p.innerHTML='';
   colRow(p,'cor do fundo',MP.backdropColor,v=>MP.backdropColor=v);colRow(p,'cor do objeto',MP.objectColor,v=>MP.objectColor=v);
   for(const[k,l,min,max]of[['artworkScale','escala da arte',.6,1.4],['artworkOffsetX','arte x',-.3,.3],['artworkOffsetY','arte y',-.3,.3],['shadowDepth','sombra',0,1],['surfaceTexture','textura/dobras',0,1],['specularSheen','brilho',0,1],['lightAngle','ângulo da luz',0,360],['vignette','vinheta',0,1]])
     row(p,l,{min,max,d:DEFAULT_MOCKUP_PARAMS[k]},()=>MP[k],v=>MP[k]=v)}
-$('#mockOpen').onclick=()=>{$('#mock').hidden=false;mockOn=true;buildMock()};
+$('#mockOpen').onclick=()=>{$('#mock').hidden=false;mockOn=true;MP.outputWidth=MP.outputHeight=800;buildMock()};
 $('#mockClose').onclick=()=>{$('#mock').hidden=true;mockOn=false};
-$('#mockReset').onclick=()=>{Object.assign(MP,DEFAULT_MOCKUP_PARAMS);buildMock()};
-$('#mockExp').onclick=async()=>{const k=+$('#mockScale').value;MP.outputWidth=MP.outputHeight=1600*k;renderMockupScene(mcv,cv,MP);
-  const blob=await new Promise(r=>mcv.toBlob(r,'image/png'));MP.outputWidth=MP.outputHeight=1600;dl(blob,`mockup-${MP.template}-${Date.now()}.png`)};
+$('#mockReset').onclick=()=>{Object.assign(MP,DEFAULT_MOCKUP_PARAMS,{outputWidth:800,outputHeight:800});buildMock()};
+$('#mockExp').onclick=async()=>{const k=+$('#mockScale').value;busy=true;setSize(1);render(T); // arte em resolução cheia só na hora de salvar
+  MP.outputWidth=MP.outputHeight=1600*k;renderMockupScene(mcv,cv,MP);
+  const blob=await new Promise(r=>mcv.toBlob(r,'image/png'));MP.outputWidth=MP.outputHeight=800;setSize();busy=false;dl(blob,`mockup-${MP.template}-${Date.now()}.png`)};
 function recordVideo(){
   if(rec){rec.stop();return}
   const fps=+$('#fps').value,dur=Math.max(1,+$('#dur').value||6);
@@ -1592,7 +1601,7 @@ function recordVideo(){
   const stream=cv.captureStream(fps),chunks=[];
   rec=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:Math.min(80e6,20e6*px*px)});
   rec.ondataavailable=e=>e.data.size&&chunks.push(e.data);
-  rec.onstop=()=>{stream.getTracks().forEach(t=>t.stop());const w=W,h=H;setSize(1);rec=null;$('#vid').textContent='● Gravar vídeo';
+  rec.onstop=()=>{stream.getTracks().forEach(t=>t.stop());const w=W,h=H;setSize();rec=null;$('#vid').textContent='● Gravar vídeo';
     dl(new Blob(chunks,{type:mime}),`thermal-${w}x${h}-${Date.now()}.${mime.includes('mp4')?'mp4':'webm'}`);$('#status').textContent=`✓ vídeo ${w}×${h} (${mime.split(';')[0]})`};
   rec.start(250);recEnd=performance.now()+dur*1000;$('#vid').textContent='■ Parar';
   setTimeout(()=>rec?.state==='recording'&&rec.stop(),dur*1000)}
@@ -1662,11 +1671,13 @@ $('#aiGo').onclick=async()=>{const p=$('#aiPrompt').value.trim();if(!p)return;co
 for(const k of Object.keys(PALETTES))$('#pal').add(new Option(k,k));
 for(const k of Object.keys(FORMATS))$('#fmt').add(new Option(k,k));
 $('#pal').onchange=e=>setPalette(e.target.value);
-$('#fmt').onchange=e=>{fmt=e.target.value;$('#customSize').hidden=fmt!=='personalizado';setSize(1)};
-for(const id of['#cw','#ch'])$(id).onchange=()=>{const v=id=>Math.max(64,Math.min(8192,Math.round(+$(id).value)||1080));FORMATS.personalizado=[v('#cw'),v('#ch')];setSize(1)};
+$('#fmt').onchange=e=>{fmt=e.target.value;$('#customSize').hidden=fmt!=='personalizado';setSize()};
+for(const id of['#cw','#ch'])$(id).onchange=()=>{const v=id=>Math.max(64,Math.min(8192,Math.round(+$(id).value)||1080));FORMATS.personalizado=[v('#cw'),v('#ch')];setSize()};
 [...$('#customStops').children].forEach((c,i)=>c.oninput=()=>{S.custom[i]=c.value;setPalette('custom')});
 $('#addSub').onclick=()=>{const L={type:'sub',kind:'splash_spheres',name:subName('splash_spheres'),...base()};layers.unshift(L);sel=L;buildLayers();buildProps()};
 $('#bg').oninput=e=>bgHex=e.target.value;
+$('#pq').onchange=e=>{pq=e.target.value;slow=1;setSize()};
+addEventListener('resize',()=>{if(!busy&&!rec)setSize()});
 $('#rAg').onclick=()=>randomize(true);$('#rLi').onclick=()=>randomize(false);
 $('#undo').onclick=undo;$('#redo').onclick=redo;$('#reset').onclick=()=>{snap();S={...defaults(),pal:S.pal,custom:S.custom};buildFx()};
 $('#play').onclick=togglePlay;$('#png').onclick=exportImage;$('#vid').onclick=recordVideo;
@@ -1681,7 +1692,7 @@ addEventListener('keydown',e=>{if(e.target.matches('input:not([type=range]),text
   if(e.key==='r')randomize(true);else if(e.key==='l')randomize(false);else if(e.key==='u')undo();else if(e.key.toLowerCase()==='z'&&(e.metaKey||e.ctrlKey)){e.preventDefault();e.shiftKey?redo():undo()}
   else if(e.key===' '){e.preventDefault();togglePlay()}});
 
-setSize(1);buildFx();addText();buildAcc();requestAnimationFrame(loop);
+setSize();buildFx();addText();buildAcc();requestAnimationFrame(loop);
 </script>
 </body>
 </html>
